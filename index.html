@@ -1,0 +1,129 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <title>AI Chat Luxo</title>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&display=swap" rel="stylesheet">
+  <style>
+    /* Mantém o estilo premium com dark/light mode */
+    body { margin:0; font-family:"Inter",sans-serif; background:#0f172a; color:#e5e7eb; }
+    header { background:#111827; padding:12px 16px; display:flex; justify-content:space-between; align-items:center; }
+    .btn { border:none; background:transparent; color:#e5e7eb; cursor:pointer; margin-left:8px; }
+    #chat-box { height:70vh; overflow-y:auto; padding:16px; display:flex; flex-direction:column; gap:12px; }
+    .msg { display:flex; gap:10px; }
+    .avatar { width:32px; height:32px; border-radius:50%; display:flex; align-items:center; justify-content:center; }
+    .avatar.user { background:#2563eb; color:#fff; }
+    .avatar.ai { background:#10b981; color:#fff; }
+    .bubble { padding:10px 14px; border-radius:12px; max-width:70%; }
+    .bubble.user { background:#2563eb; color:#fff; border-bottom-right-radius:4px; }
+    .bubble.ai { background:#1f2937; color:#e5e7eb; border-bottom-left-radius:4px; }
+    footer { display:flex; padding:12px; gap:8px; background:#111827; }
+    #user-input { flex:1; padding:10px; border-radius:8px; border:none; }
+    #send-btn { background:#2563eb; color:#fff; border:none; border-radius:8px; padding:10px 16px; cursor:pointer; }
+  </style>
+</head>
+<body>
+  <header>
+    <h1 id="app-title">AI Chat Luxo</h1>
+    <div>
+      <button id="lang-toggle" class="btn">🌐</button>
+      <button id="theme-toggle" class="btn">🌙</button>
+      <button id="new-chat" class="btn">➕</button>
+      <button id="clear-btn" class="btn">🗑️</button>
+    </div>
+  </header>
+
+  <div id="chat-box"></div>
+
+  <footer>
+    <input id="user-input" type="text" placeholder="Escreva sua mensagem..." />
+    <button id="send-btn">➤</button>
+  </footer>
+
+  <script>
+  window.onload = () => {
+    const USER_ID = "josue";
+    let sessionId = localStorage.getItem("session_id") || null;
+    let currentAbort = null;
+    let tokenBuffer = "";
+    let rafScheduled = false;
+
+    const chatBox = document.getElementById("chat-box");
+    const userInput = document.getElementById("user-input");
+    const sendBtn = document.getElementById("send-btn");
+    const clearBtn = document.getElementById("clear-btn");
+    const newChatBtn = document.getElementById("new-chat");
+
+    function addMessage(sender, text="") {
+      const msg = document.createElement("div"); msg.className="msg";
+      const avatar = document.createElement("div"); avatar.className=`avatar ${sender}`; avatar.textContent = sender==="user"?"🧑":"🤖";
+      const bubble = document.createElement("div"); bubble.className=`bubble ${sender}`; bubble.textContent=text;
+      msg.appendChild(avatar); msg.appendChild(bubble);
+      chatBox.appendChild(msg);
+      chatBox.scrollTop = chatBox.scrollHeight;
+      return bubble;
+    }
+
+    function flushTokens(aiBubble) {
+      if (!tokenBuffer) { rafScheduled=false; return; }
+      aiBubble.textContent += tokenBuffer;
+      tokenBuffer="";
+      chatBox.scrollTop = chatBox.scrollHeight;
+      rafScheduled=false;
+    }
+
+    async function sendMessage(forceText=null) {
+      const text = (forceText!==null ? forceText : userInput.value.trim());
+      if (!text) return;
+      addMessage("user", text);
+      userInput.value="";
+      const aiBubble = addMessage("ai","");
+
+      if (currentAbort) currentAbort.abort();
+      currentAbort = new AbortController();
+
+      try {
+        const res = await fetch("/completion", {
+          method:"POST",
+          headers:{"Content-Type":"application/json"},
+          body:JSON.stringify({ user_id:USER_ID, session_id:sessionId||"default", prompt:text }),
+          signal: currentAbort.signal
+        });
+        if (!res.ok || !res.body) { aiBubble.textContent="⚠️ Erro"; return; }
+        const reader = res.body.getReader();
+        const decoder = new TextDecoder("utf-8");
+        tokenBuffer=""; rafScheduled=false;
+        while(true){
+          const {done,value} = await reader.read();
+          if(done) break;
+          const chunk = decoder.decode(value,{stream:true});
+          const events = chunk.split("\n\n");
+          for(const evt of events){
+            if(!evt.trim().startsWith("data: ")) continue;
+            const payload = evt.trim().slice(6).trim();
+            if(!payload) continue;
+            try{
+              const data = JSON.parse(payload);
+              if(data.token){
+                tokenBuffer += data.token;
+                if(!rafScheduled){
+                  rafScheduled=true;
+                  requestAnimationFrame(()=>flushTokens(aiBubble));
+                }
+              }
+            }catch(e){}
+          }
+        }
+        if(tokenBuffer) flushTokens(aiBubble);
+      } catch(e){ aiBubble.textContent="⚠️ Erro"; }
+      finally{ currentAbort=null; }
+    }
+
+    sendBtn.onclick = ()=>sendMessage();
+    userInput.addEventListener("keydown", e=>{ if(e.key==="Enter"){ e.preventDefault(); sendMessage(); }});
+    clearBtn.onclick = ()=>{ chatBox.innerHTML=""; };
+    newChatBtn.onclick = ()=>{ sessionId=null; localStorage.removeItem("session_id"); chatBox.innerHTML=""; };
+  };
+  </script>
+</body>
+</html>
